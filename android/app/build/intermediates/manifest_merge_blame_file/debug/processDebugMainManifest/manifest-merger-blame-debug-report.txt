@@ -1,0 +1,60 @@
+1<?xml version="1.0" encoding="utf-8"?>
+2<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+3    package="com.tombadplayer"
+4    android:versionCode="1"
+5    android:versionName="0.1.0" >
+6
+7    <uses-sdk
+7-->INJECTED
+8        android:minSdkVersion="23"
+8-->INJECTED
+9        android:targetSdkVersion="35" />
+9-->INJECTED
+10
+11    <uses-permission android:name="android.permission.INTERNET" />
+11-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:2:5-66
+11-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:2:22-64
+12    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+12-->[androidx.media3:media3-exoplayer:1.11.1] /data/data/com.termux/files/home/.gradle/caches/9.9.0/transforms/3a8c3f0b20d84898900a618611614678/transformed/media3-exoplayer-1.11.1/AndroidManifest.xml:22:5-79
+12-->[androidx.media3:media3-exoplayer:1.11.1] /data/data/com.termux/files/home/.gradle/caches/9.9.0/transforms/3a8c3f0b20d84898900a618611614678/transformed/media3-exoplayer-1.11.1/AndroidManifest.xml:22:22-76
+13    <uses-permission android:name="android.permission.WAKE_LOCK" />
+13-->[androidx.media3:media3-exoplayer:1.11.1] /data/data/com.termux/files/home/.gradle/caches/9.9.0/transforms/3a8c3f0b20d84898900a618611614678/transformed/media3-exoplayer-1.11.1/AndroidManifest.xml:23:5-68
+13-->[androidx.media3:media3-exoplayer:1.11.1] /data/data/com.termux/files/home/.gradle/caches/9.9.0/transforms/3a8c3f0b20d84898900a618611614678/transformed/media3-exoplayer-1.11.1/AndroidManifest.xml:23:22-65
+14
+15    <application
+15-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:4:5-20:19
+16        android:appComponentFactory="androidx.core.app.CoreComponentFactory"
+16-->[androidx.core:core:1.7.0] /data/data/com.termux/files/home/.gradle/caches/9.9.0/transforms/68faba7275b98dbbe5680de338909b02/transformed/core-1.7.0/AndroidManifest.xml:24:18-86
+17        android:debuggable="true"
+18        android:extractNativeLibs="false"
+18-->INJECTED
+19        android:label="TombadPlayer"
+19-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:5:9-37
+20        android:theme="@android:style/Theme.Material.NoActionBar"
+20-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:6:9-66
+21        android:usesCleartextTraffic="false" >
+21-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:7:9-45
+22        <activity
+22-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:9:9-19:20
+23            android:name="com.tombadplayer.MainActivity"
+23-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:10:13-41
+24            android:configChanges="orientation|screenSize|keyboardHidden"
+24-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:11:13-74
+25            android:exported="true"
+25-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:13:13-36
+26            android:screenOrientation="unspecified" >
+26-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:12:13-52
+27            <intent-filter>
+27-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:15:13-18:29
+28                <action android:name="android.intent.action.MAIN" />
+28-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:16:17-68
+28-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:16:25-66
+29
+30                <category android:name="android.intent.category.LAUNCHER" />
+30-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:17:17-76
+30-->/data/data/com.termux/files/home/TombadPlayer/android/app/src/main/AndroidManifest.xml:17:27-74
+31            </intent-filter>
+32        </activity>
+33    </application>
+34
+35</manifest>
