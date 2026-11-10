@@ -1,0 +1,26 @@
+# Build outputs
+build/
+app/build/
+.gradle/
+*.apk
+*.aab
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Local config
+local.properties
+
+# النسخ الاحتياطية اللي اتولدت من الأوامر
+*.before_ultimate_*
+*.backup
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# ملفات مؤقتة
+Task

@@ -1,6 +1,8 @@
 package com.tombadplayer;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.Configuration;
@@ -19,7 +21,6 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -27,14 +28,15 @@ import android.widget.TextView;
 
 import androidx.media3.common.AudioAttributes;
 import androidx.media3.common.C;
-import androidx.media3.common.MediaItem;
-import androidx.media3.common.MimeTypes;
 import androidx.media3.common.PlaybackException;
 import androidx.media3.common.PlaybackParameters;
 import androidx.media3.common.Player;
+import androidx.media3.datasource.HttpDataSource;
 import androidx.media3.exoplayer.ExoPlayer;
+import androidx.media3.exoplayer.source.MediaSource;
 import androidx.media3.ui.PlayerView;
 
+import java.util.List;
 import java.util.Locale;
 
 public class PlayerActivity extends Activity {
@@ -49,12 +51,13 @@ public class PlayerActivity extends Activity {
     private static final long MAX_DELAY = 120000;
     private static final float[] SPEEDS = {0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f};
     private static final long[] STEPS = {10, 100, 1000};
+    private static final int[] FALLBACK_ORDER = {
+            SourceTools.HLS, SourceTools.PROG, SourceTools.DASH, SourceTools.SS};
 
     private ExoPlayer videoPlayer, audioPlayer;
     private PlayerView playerView;
     private EditText videoUrl, audioUrl;
     private TextView status, syncInfo, delayLabel, speedLabel;
-    private CheckBox allowHttp;
     private final Button[] stepButtons = new Button[3];
 
     private long stepMs = 100, delayMs = 0;
@@ -62,15 +65,22 @@ public class PlayerActivity extends Activity {
     private boolean started = false;
     private boolean activityActive = true;
     private boolean networkUp = true;
+    private boolean resolving = false;
+    private boolean linkDialogOpen = false;
+    private boolean positionRestored = false;
     private float lastAudioSpeed = -1f;
     private long lastSeekAt = 0;
+    private long lastPosSave = 0;
     private int sessionId = 0;
-    private String sourceOne = "";
-    private String sourceTwo = "";
-    private boolean videoUsingSecond = false;
-    private boolean audioUsingFirst = false;
 
+    private String sourceOne = "", sourceTwo = "";
+    private boolean swapped = false;
 
+    private final SourceTools.Spec[] spec = new SourceTools.Spec[2];
+    private final int[] kind = new int[2];
+    private final int[] triedMask = new int[2];
+    private final int[] uaIdx = new int[2];
+    private final long[] recoveryPosition = new long[2];
     private final int[] retries = new int[2];
     private final boolean[] needsRecovery = new boolean[2];
     private final Runnable[] retryTask = new Runnable[2];
@@ -89,8 +99,6 @@ public class PlayerActivity extends Activity {
             handler.postDelayed(this, 250);
         }
     };
-
-    // ---------------- أدوات التصميم ----------------
 
     private int dp(float v) { return (int) (v * getResources().getDisplayMetrics().density); }
 
@@ -175,8 +183,6 @@ public class PlayerActivity extends Activity {
         r.addView(child, p);
     }
 
-    // ---------------- بناء الواجهة ----------------
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -206,33 +212,30 @@ public class PlayerActivity extends Activity {
         videoUrl = input("https://example.com/video.m3u8");
         LinearLayout r1 = row();
         addWeighted(r1, videoUrl, 1f, 0);
-        addFixed(r1, button("ملف", FIELD, v -> pick(REQ_VIDEO)), 64, 44);
+        addFixed(r1, button("لصق", FIELD, v -> paste(videoUrl)), 52, 44);
+        addFixed(r1, button("ملف", FIELD, v -> pick(REQ_VIDEO)), 52, 44);
         add(sources, r1, 6);
 
         add(sources, text("مصدر الصوت", 14, Color.WHITE, true), 12);
         audioUrl = input("https://example.com/audio.m3u8");
         LinearLayout r2 = row();
         addWeighted(r2, audioUrl, 1f, 0);
-        addFixed(r2, button("ملف", FIELD, v -> pick(REQ_AUDIO)), 64, 44);
+        addFixed(r2, button("لصق", FIELD, v -> paste(audioUrl)), 52, 44);
+        addFixed(r2, button("ملف", FIELD, v -> pick(REQ_AUDIO)), 52, 44);
         add(sources, r2, 6);
 
-        allowHttp = new CheckBox(this);
-        allowHttp.setText("السماح بروابط HTTP غير المشفّرة");
-        allowHttp.setTextColor(DIM);
-        allowHttp.setTextSize(12);
-        add(sources, allowHttp, 8);
+        add(sources, text("للروابط التي تحتاج ترويسات: رابط|Referer=...&User-Agent=...",
+                11, DIM, false), 8);
 
         LinearLayout r3 = row();
         addWeighted(r3, button("⇄ تبديل", FIELD, v -> swapSources()), 1f, 48);
         addWeighted(r3, button("▶ تشغيل المصدرين", ACCENT, v -> startPlayback()), 2f, 48);
         add(sources, r3, 12);
-        LinearLayout independentSwitches = row();
-        addWeighted(independentSwitches,
-                button("تبديل الصورة", 0xFF315C9E, v -> switchVideoSource()), 1f, 46);
-        addWeighted(independentSwitches,
-                button("تبديل الصوت", 0xFF287A58, v -> switchAudioSource()), 1f, 46);
-        add(sources, independentSwitches, 8);
 
+        LinearLayout r4 = row();
+        addWeighted(r4, button("تبديل الصورة", 0xFF315C9E, v -> swapSources()), 1f, 46);
+        addWeighted(r4, button("تبديل الصوت", 0xFF287A58, v -> swapSources()), 1f, 46);
+        add(sources, r4, 8);
         add(content, sources, 12);
 
         LinearLayout sync = card();
@@ -281,7 +284,6 @@ public class PlayerActivity extends Activity {
 
         videoUrl.setText(prefs.getString("video", ""));
         audioUrl.setText(prefs.getString("audio", ""));
-        allowHttp.setChecked(prefs.getBoolean("http", false));
         delayMs = prefs.getLong("delay", 0);
         stepMs = prefs.getLong("step", 100);
         refreshSteps();
@@ -290,13 +292,14 @@ public class PlayerActivity extends Activity {
     }
 
     private void createPlayers() {
-        videoPlayer = new ExoPlayer.Builder(this).build();
-        audioPlayer = new ExoPlayer.Builder(this).build();
+        videoPlayer = Media3EngineFactory.create(this);
+        audioPlayer = Media3EngineFactory.create(this);
 
         videoPlayer.setTrackSelectionParameters(videoPlayer.getTrackSelectionParameters()
                 .buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_AUDIO, true).build());
         audioPlayer.setTrackSelectionParameters(audioPlayer.getTrackSelectionParameters()
-                .buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true).build());
+                .buildUpon().setTrackTypeDisabled(C.TRACK_TYPE_VIDEO, true)
+                .setMaxVideoSize(426, 240).build());
 
         audioPlayer.setAudioAttributes(new AudioAttributes.Builder()
                 .setUsage(C.USAGE_MEDIA)
@@ -338,7 +341,17 @@ public class PlayerActivity extends Activity {
         }
     }
 
-    // ---------------- المصادر ----------------
+    private void paste(EditText target) {
+        try {
+            ClipboardManager clip = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clip != null && clip.hasPrimaryClip() && clip.getPrimaryClip().getItemCount() > 0) {
+                CharSequence t = clip.getPrimaryClip().getItemAt(0).coerceToText(this);
+                if (t != null) target.setText(t.toString().trim());
+            }
+        } catch (Exception e) {
+            notice("تعذر اللصق");
+        }
+    }
 
     private void pick(int code) {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
@@ -360,106 +373,178 @@ public class PlayerActivity extends Activity {
         if (req == REQ_AUDIO) audioUrl.setText(uri.toString());
     }
 
-    private void swapSources() {
-        String v = videoUrl.getText().toString().trim();
-        String a = audioUrl.getText().toString().trim();
-
-        videoUrl.setText(a);
-        audioUrl.setText(v);
-
-        savePrefs();
-
-        if (started) {
-            startPlayback();
-            notice("تم تبديل المصدرين وإعادة تشغيلهما");
-        } else {
-            notice("تم تبديل حقلي المصدرين");
-        }
+    private String roleSource(int role) {
+        if (role == V) return swapped ? sourceTwo : sourceOne;
+        return swapped ? sourceOne : sourceTwo;
     }
 
-
-    private void switchVideoSource() {
-        if (!started) {
-            notice("شغّل المصدرين أولاً");
-            return;
-        }
-        videoUsingSecond = !videoUsingSecond;
-        replaceActiveSource(V, videoUsingSecond ? sourceTwo : sourceOne);
-        notice("تم تبديل مصدر الصورة فقط");
-    }
-
-    private void switchAudioSource() {
-        if (!started) {
-            notice("شغّل المصدرين أولاً");
-            return;
-        }
-        audioUsingFirst = !audioUsingFirst;
-        replaceActiveSource(A, audioUsingFirst ? sourceOne : sourceTwo);
-        notice("تم تبديل مصدر الصوت فقط");
-    }
-
-    private void replaceActiveSource(int type, String url) {
-        ExoPlayer p = player(type);
-        if (p == null || url == null || url.trim().isEmpty()) return;
-        boolean resume = p.getPlayWhenReady();
-        p.stop();
-        p.setMediaItem(createMediaItem(url));
-        p.setPlaybackParameters(new PlaybackParameters(SPEEDS[speedIndex]));
-        p.prepare();
-        p.setPlayWhenReady(resume);
-    }
-
-    private boolean valid(String s) {
-        String x = s.toLowerCase(Locale.US);
-        if (x.startsWith("https://") || x.startsWith("content://") || x.startsWith("file://"))
-            return true;
-        return x.startsWith("http://") && allowHttp.isChecked();
-    }
-
-    private MediaItem createMediaItem(String value) {
-        Uri uri = Uri.parse(value.trim());
-        MediaItem.Builder b = new MediaItem.Builder().setUri(uri);
-        String path = uri.getPath();
-        if (path != null && path.toLowerCase(Locale.US).endsWith(".m3u8"))
-            b.setMimeType(MimeTypes.APPLICATION_M3U8);
-        b.setLiveConfiguration(new MediaItem.LiveConfiguration.Builder()
-                .setMinPlaybackSpeed(1f).setMaxPlaybackSpeed(1f).build());
-        return b.build();
+    private String posKey(String raw) {
+        return "pos_" + Integer.toHexString(SourceTools.parse(raw).url.hashCode());
     }
 
     private void startPlayback() {
-        String v = videoUrl.getText().toString().trim();
-        String a = audioUrl.getText().toString().trim();
-        if (!valid(v)) { notice("رابط الصورة غير صالح (HTTP يحتاج تفعيل الخيار)"); return; }
-        if (!valid(a)) { notice("رابط الصوت غير صالح (HTTP يحتاج تفعيل الخيار)"); return; }
+        if (resolving) return;
+        final String v = videoUrl.getText().toString().trim();
+        final String a = audioUrl.getText().toString().trim();
+        if (v.isEmpty() || a.isEmpty()) { notice("أدخل رابط الصورة ورابط الصوت"); return; }
+        if (!SourceTools.supported(v)) { notice("رابط الصورة غير مدعوم (RTMP غير مدعوم)"); return; }
+        if (!SourceTools.supported(a)) { notice("رابط الصوت غير مدعوم (RTMP غير مدعوم)"); return; }
         savePrefs();
-        sourceOne = v;
-        sourceTwo = a;
-        videoUsingSecond = false;
-        audioUsingFirst = false;
 
+        resolving = true;
+        notice("جارٍ فحص الروابط...");
+        final int session = ++sessionId;
 
-        sessionId++;                       // يُبطل أي إعادة محاولة قديمة
-        cancelRetries();
-        retries[V] = retries[A] = 0;
-        needsRecovery[V] = needsRecovery[A] = false;
-        lastAudioSpeed = -1f;
-        lastSeekAt = 0;
-        started = true;
-
-        videoPlayer.stop();
-        audioPlayer.stop();
-        videoPlayer.setMediaItem(createMediaItem(v));
-        audioPlayer.setMediaItem(createMediaItem(a));
-        videoPlayer.setPlaybackParameters(new PlaybackParameters(SPEEDS[speedIndex]));
-        audioPlayer.setPlaybackParameters(new PlaybackParameters(SPEEDS[speedIndex]));
-        audioPlayer.setPlayWhenReady(false);
-        videoPlayer.prepare();
-        audioPlayer.prepare();
-        videoPlayer.setPlayWhenReady(true);
+        new Thread(() -> {
+            final SourceTools.Sniff sv = SourceTools.sniff(this, v);
+            final SourceTools.Sniff sa = v.equals(a) ? sv : SourceTools.sniff(this, a);
+            runOnUiThread(() -> {
+                resolving = false;
+                if (session != sessionId || isFinishing() || isDestroyed()) return;
+                if (sv.playlist != null) { choosePlaylist(sv.playlist, V); return; }
+                if (sa.playlist != null) { choosePlaylist(sa.playlist, A); return; }
+                beginPlayback(v, a, sv.kind, sa.kind);
+            });
+        }, "Tombad-sniff").start();
     }
 
-    // ---------------- المزامنة ----------------
+    private void choosePlaylist(final List<M3uPlaylistParser.Entry> list, final int role) {
+        if (list.size() == 1) {
+            if (role == V) videoUrl.setText(list.get(0).url);
+            else audioUrl.setText(list.get(0).url);
+            startPlayback();
+            return;
+        }
+        String[] names = new String[list.size()];
+        for (int i = 0; i < names.length; i++) names[i] = list.get(i).title;
+        new AlertDialog.Builder(this)
+                .setTitle(role == V ? "اختر مصدر الصورة" : "اختر مصدر الصوت")
+                .setItems(names, (d, which) -> {
+                    String sel = list.get(which).url;
+                    if (role == V) videoUrl.setText(sel);
+                    else audioUrl.setText(sel);
+                    startPlayback();
+                })
+                .setNegativeButton("إلغاء", null)
+                .show();
+    }
+
+    private void resetRoleState(int i) {
+        retries[i] = 0;
+        needsRecovery[i] = false;
+        recoveryPosition[i] = 0;
+        triedMask[i] = 0;
+        uaIdx[i] = 0;
+    }
+
+    private void beginPlayback(String v, String a, int kv, int ka) {
+        sourceOne = v;
+        sourceTwo = a;
+        swapped = false;
+        sessionId++;
+        cancelRetries();
+        resetRoleState(V);
+        resetRoleState(A);
+        kind[V] = kv;
+        kind[A] = ka;
+        spec[V] = SourceTools.parse(v);
+        spec[A] = SourceTools.parse(a);
+        lastAudioSpeed = -1f;
+        lastSeekAt = 0;
+        positionRestored = false;
+        started = true;
+
+        videoPlayer.setPlaybackParameters(new PlaybackParameters(SPEEDS[speedIndex]));
+        audioPlayer.setPlaybackParameters(new PlaybackParameters(SPEEDS[speedIndex]));
+        prepareRole(V, false);
+        prepareRole(A, false);
+        notice("تم إرسال المصدرين إلى المشغل");
+    }
+
+    private void prepareRole(int i, boolean keepPosition) {
+        ExoPlayer p = player(i);
+        if (p == null || spec[i] == null) return;
+        long pos = C.TIME_UNSET;
+        if (keepPosition && recoveryPosition[i] > 0 && !p.isCurrentMediaItemLive())
+            pos = recoveryPosition[i];
+        try {
+            MediaSource src = SourceTools.build(this, spec[i], kind[i], uaIdx[i]);
+            p.stop();
+            if (pos == C.TIME_UNSET) p.setMediaSource(src);
+            else p.setMediaSource(src, pos);
+            p.prepare();
+            p.setPlayWhenReady(i == V);
+        } catch (Exception e) {
+            notice("تعذر تجهيز مصدر " + who(i) + ": " + e.getMessage());
+        }
+    }
+
+    private void swapSources() {
+        if (!started) {
+            String v = videoUrl.getText().toString().trim();
+            String a = audioUrl.getText().toString().trim();
+            videoUrl.setText(a);
+            audioUrl.setText(v);
+            savePrefs();
+            notice("تم تبديل الحقلين");
+            return;
+        }
+        swapped = !swapped;
+        videoUrl.setText(roleSource(V));
+        audioUrl.setText(roleSource(A));
+        savePrefs();
+
+        sessionId++;
+        cancelRetries();
+        int t = kind[V]; kind[V] = kind[A]; kind[A] = t;
+        resetRoleState(V);
+        resetRoleState(A);
+        spec[V] = SourceTools.parse(roleSource(V));
+        spec[A] = SourceTools.parse(roleSource(A));
+        positionRestored = false;
+        lastAudioSpeed = -1f;
+        lastSeekAt = 0;
+        prepareRole(V, false);
+        prepareRole(A, false);
+        notice("تم تبديل الصورة والصوت");
+    }
+
+    private void replaceRoleSource(int role, String raw) {
+        boolean first = (role == V) != swapped;
+        if (first) sourceOne = raw; else sourceTwo = raw;
+        if (role == V) videoUrl.setText(raw); else audioUrl.setText(raw);
+        savePrefs();
+        cancelRetry(role);
+        long keep = recoveryPosition[role];
+        resetRoleState(role);
+        recoveryPosition[role] = keep;
+        spec[role] = SourceTools.parse(raw);
+        kind[role] = SourceTools.kindFromUrl(spec[role].url);
+        if (role == V) positionRestored = true;
+        prepareRole(role, true);
+        notice("تم تحديث رابط " + who(role));
+    }
+
+    private void askNewLink(final int role, String reason) {
+        needsRecovery[role] = false;
+        if (linkDialogOpen || isFinishing() || isDestroyed()) { notice(reason); return; }
+        linkDialogOpen = true;
+        final EditText et = input("الصق الرابط الجديد");
+        et.setText(roleSource(role));
+        AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("تحديث رابط " + who(role))
+                .setMessage(reason + "\nالصق رابطًا جديدًا ويكمل من نفس الموضع.")
+                .setView(et)
+                .setPositiveButton("تحديث", (d, w) -> {
+                    String n = et.getText().toString().trim();
+                    if (SourceTools.supported(n)) replaceRoleSource(role, n);
+                    else notice("رابط غير صالح");
+                })
+                .setNegativeButton("إلغاء", null)
+                .create();
+        dlg.setOnDismissListener(d -> linkDialogOpen = false);
+        dlg.show();
+    }
 
     private boolean timelinesReady() {
         return !videoPlayer.getCurrentTimeline().isEmpty()
@@ -499,10 +584,8 @@ public class PlayerActivity extends Activity {
 
         float user = SPEEDS[speedIndex];
         long now = SystemClock.elapsedRealtime();
-        boolean live = isLive();
-        long diff;          // موجب = الصوت متأخر عن المطلوب في البث / متقدم في الملفات
 
-        if (live) {
+        if (isLive()) {
             long vOff = videoPlayer.getCurrentLiveOffset();
             long aOff = audioPlayer.getCurrentLiveOffset();
             if (!audioPlayer.getPlayWhenReady()) audioPlayer.setPlayWhenReady(true);
@@ -510,8 +593,8 @@ public class PlayerActivity extends Activity {
                 syncInfo.setText("بث مباشر: بانتظار معلومات التوقيت");
                 return;
             }
-            long want = vOff + delayMs;          // الصوت يجب أن يكون أبعد عن الحافة بمقدار التأخير
-            long lag = aOff - want;              // موجب = الصوت متأخر أكثر من المطلوب
+            long want = vOff + delayMs;
+            long lag = aOff - want;
             if (Math.abs(lag) > 1500 && now - lastSeekAt > 4000) {
                 audioPlayer.seekTo(Math.max(0, audioPlayer.getCurrentPosition() + lag));
                 lastSeekAt = now;
@@ -521,6 +604,11 @@ public class PlayerActivity extends Activity {
             else if (Math.abs(lag) < 30) setAudioSpeed(user);
             syncInfo.setText("بث مباشر | انحراف: " + (lag >= 0 ? "+" : "") + lag + " ms");
             return;
+        }
+
+        if (now - lastPosSave > 5000) {
+            lastPosSave = now;
+            prefs.edit().putLong(posKey(roleSource(V)), videoPlayer.getCurrentPosition()).apply();
         }
 
         long target = videoPlayer.getCurrentPosition() - delayMs;
@@ -538,7 +626,7 @@ public class PlayerActivity extends Activity {
         }
         if (as != Player.STATE_READY) return;
 
-        diff = audioPlayer.getCurrentPosition() - target;
+        long diff = audioPlayer.getCurrentPosition() - target;
         if (Math.abs(diff) > 300 && now - lastSeekAt > 1500) {
             audioPlayer.seekTo(target);
             lastSeekAt = now;
@@ -559,7 +647,7 @@ public class PlayerActivity extends Activity {
         delayMs = Math.max(-MAX_DELAY, Math.min(MAX_DELAY, delayMs + amount));
         updateDelayLabel();
         prefs.edit().putLong("delay", delayMs).apply();
-        lastSeekAt = 0;   // يسمح للمزامنة بالتصحيح فورًا
+        lastSeekAt = 0;
         if (started && timelinesReady() && !isLive()) {
             audioPlayer.seekTo(Math.max(0, videoPlayer.getCurrentPosition() - delayMs));
         }
@@ -578,18 +666,17 @@ public class PlayerActivity extends Activity {
 
     private void cycleSpeed() {
         speedIndex = (speedIndex + 1) % SPEEDS.length;
-        speedLabel.setText(String.format(Locale.US, "السرعة: %.2fx", SPEEDS[speedIndex]));
-        if (videoPlayer != null)
-            videoPlayer.setPlaybackParameters(new PlaybackParameters(SPEEDS[speedIndex]));
-        lastAudioSpeed = -1f;
+        float s = SPEEDS[speedIndex];
+        speedLabel.setText(String.format(Locale.US, "السرعة: %.2fx", s));
+        if (videoPlayer != null) videoPlayer.setPlaybackParameters(new PlaybackParameters(s));
+        if (audioPlayer != null) audioPlayer.setPlaybackParameters(new PlaybackParameters(s, 1f));
+        lastAudioSpeed = s;
     }
-
-    // ---------------- الأخطاء والشبكة ----------------
 
     private void notice(String s) {
         notice = s;
         noticeUntil = SystemClock.elapsedRealtime() + 5000;
-        status.setText(s);
+        if (status != null) status.setText(s);
     }
 
     private ExoPlayer player(int i) { return i == V ? videoPlayer : audioPlayer; }
@@ -602,13 +689,100 @@ public class PlayerActivity extends Activity {
             handler.removeCallbacks(retryTask[i]);
             retryTask[i] = null;
         }
+        if (i == V && !positionRestored && videoPlayer != null) {
+            positionRestored = true;
+            if (!videoPlayer.isCurrentMediaItemLive()) {
+                long saved = prefs.getLong(posKey(roleSource(V)), 0);
+                long dur = videoPlayer.getDuration();
+                if (saved > 5000 && (dur == C.TIME_UNSET || saved < dur - 15000)) {
+                    videoPlayer.seekTo(saved);
+                    notice("استئناف من آخر موضع");
+                }
+            }
+        }
+    }
+
+    private int httpErrorCode(Throwable error) {
+        Throwable t = error;
+        while (t != null) {
+            if (t instanceof HttpDataSource.InvalidResponseCodeException)
+                return ((HttpDataSource.InvalidResponseCodeException) t).responseCode;
+            t = t.getCause();
+        }
+        return -1;
+    }
+
+    private boolean isFormatError(int code) {
+        return code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED
+                || code == PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED
+                || code == PlaybackException.ERROR_CODE_PARSING_CONTAINER_UNSUPPORTED
+                || code == PlaybackException.ERROR_CODE_PARSING_MANIFEST_UNSUPPORTED;
+    }
+
+    private int nextKind(int i) {
+        triedMask[i] |= (1 << kind[i]);
+        for (int k : FALLBACK_ORDER) if ((triedMask[i] & (1 << k)) == 0) return k;
+        return -1;
     }
 
     private void onSourceError(int i, PlaybackException e) {
-        needsRecovery[i] = true;
-        if (e.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && player(i) != null) {
-            player(i).seekToDefaultPosition();
+        ExoPlayer failed = player(i);
+        if (failed != null && !failed.isCurrentMediaItemLive())
+            recoveryPosition[i] = Math.max(0, failed.getCurrentPosition());
+
+        int code = e.errorCode;
+
+        if (code == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && failed != null) {
+            failed.seekToDefaultPosition();
+            failed.prepare();
+            return;
         }
+
+        int http = httpErrorCode(e);
+        if (http == 401 || http == 403 || http == 406 || http == 429) {
+            if (uaIdx[i] < SourceTools.UA_COUNT - 1) {
+                uaIdx[i]++;
+                notice("الخادم رفض (" + http + ")، تجربة هوية اتصال بديلة...");
+                prepareRole(i, true);
+                return;
+            }
+            askNewLink(i, "الخادم رفض الوصول (" + http + ")");
+            return;
+        }
+        if (http == 404 || http == 410) {
+            askNewLink(i, "الرابط غير موجود أو انتهت صلاحيته (" + http + ")");
+            return;
+        }
+
+        if (isFormatError(code)) {
+            int next = nextKind(i);
+            if (next != -1) {
+                kind[i] = next;
+                notice("تجربة طريقة تشغيل بديلة لـ" + who(i) + "...");
+                prepareRole(i, true);
+            } else {
+                needsRecovery[i] = false;
+                notice("صيغة مصدر " + who(i) + " غير مدعومة أو الرابط ليس وسائط");
+            }
+            return;
+        }
+
+        if (code == PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND
+                || code == PlaybackException.ERROR_CODE_IO_NO_PERMISSION) {
+            needsRecovery[i] = false;
+            notice("لا يمكن قراءة الملف. استخدم زر «ملف» لاختياره من الهاتف");
+            return;
+        }
+
+        if (code == PlaybackException.ERROR_CODE_DECODING_FORMAT_EXCEEDS_CAPABILITIES
+                || code == PlaybackException.ERROR_CODE_DECODER_INIT_FAILED
+                || code == PlaybackException.ERROR_CODE_DECODING_FORMAT_UNSUPPORTED) {
+            needsRecovery[i] = false;
+            notice("الجهاز لا يدعم فك ترميز " + who(i) + " (" + e.getErrorCodeName() + ")");
+            return;
+        }
+
+        needsRecovery[i] = true;
         notice("خطأ في مصدر " + who(i) + ": " + e.getErrorCodeName());
         scheduleRetry(i, true);
     }
@@ -628,7 +802,7 @@ public class PlayerActivity extends Activity {
             @Override public void run() {
                 retryTask[i] = null;
                 if (session != sessionId || isFinishing() || isDestroyed()) return;
-                if (!activityActive || !networkUp) return;   // تُستأنف عند العودة أو عودة الشبكة
+                if (!activityActive || !networkUp) return;
                 ExoPlayer p = player(i);
                 if (p == null) return;
                 notice("استعادة " + who(i) + "... المحاولة " + Math.max(1, retries[i]));
@@ -639,11 +813,14 @@ public class PlayerActivity extends Activity {
         handler.postDelayed(task, wait);
     }
 
+    private void cancelRetry(int i) {
+        if (retryTask[i] != null) handler.removeCallbacks(retryTask[i]);
+        retryTask[i] = null;
+    }
+
     private void cancelRetries() {
-        for (int i = 0; i < 2; i++) {
-            if (retryTask[i] != null) handler.removeCallbacks(retryTask[i]);
-            retryTask[i] = null;
-        }
+        cancelRetry(V);
+        cancelRetry(A);
     }
 
     private void recoverAll() {
@@ -677,7 +854,7 @@ public class PlayerActivity extends Activity {
             cm.registerDefaultNetworkCallback(netCallback);
         } catch (Exception e) {
             netCallback = null;
-            networkUp = true;   // لو فشلت المراقبة نعتمد على أخطاء المشغل فقط
+            networkUp = true;
         }
     }
 
@@ -694,7 +871,6 @@ public class PlayerActivity extends Activity {
         prefs.edit()
                 .putString("video", videoUrl.getText().toString().trim())
                 .putString("audio", audioUrl.getText().toString().trim())
-                .putBoolean("http", allowHttp.isChecked())
                 .putLong("delay", delayMs)
                 .putLong("step", stepMs)
                 .apply();
@@ -709,6 +885,9 @@ public class PlayerActivity extends Activity {
     @Override protected void onStop() {
         activityActive = false;
         savePrefs();
+        if (started && videoPlayer != null && !videoPlayer.isCurrentMediaItemLive()) {
+            prefs.edit().putLong(posKey(roleSource(V)), videoPlayer.getCurrentPosition()).apply();
+        }
         if (videoPlayer != null) videoPlayer.pause();
         if (audioPlayer != null) audioPlayer.pause();
         super.onStop();
