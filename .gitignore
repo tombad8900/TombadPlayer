@@ -21,3 +21,7 @@ __pycache__/
 # Local-only data and environment
 data/
 .env
+
+# Generated and accidental local files
+android/Task
+build-error.log
