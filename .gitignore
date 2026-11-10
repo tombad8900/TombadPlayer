@@ -3,3 +3,21 @@ config/*.local.*
 __pycache__/
 *.pyc
 .env
+
+# Local backups
+*.bak
+*.bak_*
+*.backup
+*.backup_*
+*.backup.*
+*.before_*
+*.java.bak
+
+# Android build outputs
+.gradle/
+**/build/
+*.apk
+
+# Local-only data and environment
+data/
+.env

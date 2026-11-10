@@ -9,16 +9,22 @@
         android:targetSdkVersion="35" />
 
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <application
         android:appComponentFactory="androidx.core.app.CoreComponentFactory"
         android:debuggable="true"
         android:extractNativeLibs="false"
+        android:hardwareAccelerated="true"
         android:label="TombadPlayer"
         android:theme="@android:style/Theme.Material.NoActionBar"
-        android:usesCleartextTraffic="false" >
+        android:usesCleartextTraffic="true" >
+        <activity
+            android:name="com.tombadplayer.PlayerActivity"
+            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:exported="false"
+            android:screenOrientation="unspecified" />
         <activity
             android:name="com.tombadplayer.MainActivity"
             android:configChanges="orientation|screenSize|keyboardHidden"
